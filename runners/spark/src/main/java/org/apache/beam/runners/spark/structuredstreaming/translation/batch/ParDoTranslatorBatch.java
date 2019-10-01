@@ -31,14 +31,18 @@ import org.apache.beam.runners.spark.structuredstreaming.translation.TransformTr
 import org.apache.beam.runners.spark.structuredstreaming.translation.TranslationContext;
 import org.apache.beam.runners.spark.structuredstreaming.translation.helpers.CoderHelpers;
 import org.apache.beam.runners.spark.structuredstreaming.translation.helpers.EncoderHelpers;
+import org.apache.beam.runners.spark.structuredstreaming.translation.helpers.MultiOuputCoder;
 import org.apache.beam.runners.spark.structuredstreaming.translation.helpers.SideInputBroadcast;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.SerializableCoder;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
 import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.reflect.DoFnSignature;
 import org.apache.beam.sdk.transforms.reflect.DoFnSignatures;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
+import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
@@ -84,12 +88,13 @@ class ParDoTranslatorBatch<InputT, OutputT>
         ParDoTranslation.getSchemaInformation(context.getCurrentTransform());
 
     // Init main variables
-    Dataset<WindowedValue<InputT>> inputDataSet = context.getDataset(context.getInput());
+    PValue input = context.getInput();
+    Dataset<WindowedValue<InputT>> inputDataSet = context.getDataset(input);
     Map<TupleTag<?>, PValue> outputs = context.getOutputs();
     TupleTag<?> mainOutputTag = getTupleTag(context);
     List<TupleTag<?>> outputTags = new ArrayList<>(outputs.keySet());
     WindowingStrategy<?, ?> windowingStrategy =
-        ((PCollection<InputT>) context.getInput()).getWindowingStrategy();
+        ((PCollection<InputT>) input).getWindowingStrategy();
 
     // construct a map from side input to WindowingStrategy so that
     // the DoFn runner can map main-input windows to side input windows
@@ -102,8 +107,7 @@ class ParDoTranslatorBatch<InputT, OutputT>
     SideInputBroadcast broadcastStateData = createBroadcastSideInputs(sideInputs, context);
 
     Map<TupleTag<?>, Coder<?>> outputCoderMap = context.getOutputCoders();
-    Coder<InputT> inputCoder = ((PCollection<InputT>) context.getInput()).getCoder();
-
+    Coder<InputT> inputCoder = ((PCollection<InputT>) input).getCoder();
     MetricsContainerStepMapAccumulator metricsAccum = MetricsAccumulator.getInstance();
 
     List<TupleTag<?>> additionalOutputTags = new ArrayList<>();
@@ -129,8 +133,10 @@ class ParDoTranslatorBatch<InputT, OutputT>
             broadcastStateData,
             doFnSchemaInformation);
 
-    Dataset<Tuple2<TupleTag<?>, WindowedValue<?>>> allOutputs =
-        inputDataSet.mapPartitions(doFnWrapper, EncoderHelpers.tuple2Encoder());
+    MultiOuputCoder multipleOutputCoder = MultiOuputCoder.of(SerializableCoder.of(TupleTag.class), outputCoderMap,
+        windowingStrategy.getWindowFn().windowCoder());
+    Dataset<Tuple2<TupleTag<?>, WindowedValue<?>>> allOutputs = inputDataSet
+        .mapPartitions(doFnWrapper, EncoderHelpers.fromBeamCoder(multipleOutputCoder));
     if (outputs.entrySet().size() > 1) {
       allOutputs.persist();
       for (Map.Entry<TupleTag<?>, PValue> output : outputs.entrySet()) {
