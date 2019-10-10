@@ -38,11 +38,9 @@ import org.apache.beam.sdk.coders.SerializableCoder;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.DoFnSchemaInformation;
 import org.apache.beam.sdk.transforms.PTransform;
-import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.reflect.DoFnSignature;
 import org.apache.beam.sdk.transforms.reflect.DoFnSignatures;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
-import org.apache.beam.sdk.transforms.windowing.WindowFn;
 import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
@@ -133,10 +131,13 @@ class ParDoTranslatorBatch<InputT, OutputT>
             broadcastStateData,
             doFnSchemaInformation);
 
-    MultiOuputCoder multipleOutputCoder = MultiOuputCoder.of(SerializableCoder.of(TupleTag.class), outputCoderMap,
-        windowingStrategy.getWindowFn().windowCoder());
-    Dataset<Tuple2<TupleTag<?>, WindowedValue<?>>> allOutputs = inputDataSet
-        .mapPartitions(doFnWrapper, EncoderHelpers.fromBeamCoder(multipleOutputCoder));
+    MultiOuputCoder multipleOutputCoder =
+        MultiOuputCoder.of(
+            SerializableCoder.of(TupleTag.class),
+            outputCoderMap,
+            windowingStrategy.getWindowFn().windowCoder());
+    Dataset<Tuple2<TupleTag<?>, WindowedValue<?>>> allOutputs =
+        inputDataSet.mapPartitions(doFnWrapper, EncoderHelpers.fromBeamCoder(multipleOutputCoder));
     if (outputs.entrySet().size() > 1) {
       allOutputs.persist();
       for (Map.Entry<TupleTag<?>, PValue> output : outputs.entrySet()) {
