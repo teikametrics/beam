@@ -524,6 +524,8 @@ public class RabbitMqIO {
         // we consume message without autoAck (we want to do the ack ourselves)
         channel.setDefaultConsumer(consumer);
         channel.basicConsume(queueName, false, consumer);
+      } catch (IOException e) {
+        throw e;
       } catch (Exception e) {
         throw new IOException(e);
       }
