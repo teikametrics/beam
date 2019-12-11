@@ -23,11 +23,13 @@ import com.google.auto.value.AutoValue;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.MessageProperties;
 import java.io.IOException;
+import java.util.UUID;
 import javax.annotation.Nullable;
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.joda.time.Duration;
@@ -125,8 +127,6 @@ public class RabbitMqIO {
   /** A {@link PTransform} to consume messages from RabbitMQ server. */
   @AutoValue
   public abstract static class Read extends PTransform<PBegin, PCollection<RabbitMqMessage>> {
-    @Nullable
-    abstract String uri();
 
     @Nullable
     abstract String queue();
@@ -153,12 +153,12 @@ public class RabbitMqIO {
 
     abstract TimestampPolicyFactory timestampPolicyFactory();
 
+    abstract SerializableFunction<Void, ConnectionHandler> connectionHandlerProviderFn();
+
     abstract Builder builder();
 
     @AutoValue.Builder
     abstract static class Builder {
-      abstract Builder setUri(String uri);
-
       abstract Builder setQueue(String queue);
 
       abstract Builder setQueueDeclare(boolean queueDeclare);
@@ -179,12 +179,22 @@ public class RabbitMqIO {
 
       abstract Builder setTimestampPolicyFactory(TimestampPolicyFactory timestampPolicyFactory);
 
+      abstract Builder setConnectionHandlerProviderFn(
+          SerializableFunction<Void, ConnectionHandler> connectionHandlerProviderFn);
+
       abstract Read build();
     }
 
     public Read withUri(String uri) {
       checkArgument(uri != null, "uri can not be null");
-      return builder().setUri(uri).build();
+      return withConnectionHandlerProviderFn(new ConnectionProviderFromUri(uri));
+    }
+
+    public Read withConnectionHandlerProviderFn(
+        SerializableFunction<Void, ConnectionHandler> connectionHandlerProviderFn) {
+      checkArgument(
+          connectionHandlerProviderFn != null, "connection handler provider can not be null");
+      return builder().setConnectionHandlerProviderFn(connectionHandlerProviderFn).build();
     }
 
     /**
@@ -347,9 +357,6 @@ public class RabbitMqIO {
       extends PTransform<PCollection<RabbitMqMessage>, PCollection<?>> {
 
     @Nullable
-    abstract String uri();
-
-    @Nullable
     abstract String exchange();
 
     @Nullable
@@ -362,12 +369,12 @@ public class RabbitMqIO {
 
     abstract boolean queueDeclare();
 
+    abstract SerializableFunction<Void, ConnectionHandler> connectionHandlerProviderFn();
+
     abstract Builder builder();
 
     @AutoValue.Builder
     abstract static class Builder {
-      abstract Builder setUri(String uri);
-
       abstract Builder setExchange(String exchange);
 
       abstract Builder setExchangeType(String exchangeType);
@@ -378,12 +385,22 @@ public class RabbitMqIO {
 
       abstract Builder setQueueDeclare(boolean queueDeclare);
 
+      abstract Builder setConnectionHandlerProviderFn(
+          SerializableFunction<Void, ConnectionHandler> connectionHandlerProviderFn);
+
       abstract Write build();
     }
 
     public Write withUri(String uri) {
       checkArgument(uri != null, "uri can not be null");
-      return builder().setUri(uri).build();
+      return withConnectionHandlerProviderFn(new ConnectionProviderFromUri(uri));
+    }
+
+    public Write withConnectionHandlerProviderFn(
+        SerializableFunction<Void, ConnectionHandler> connectionHandlerProviderFn) {
+      checkArgument(
+          connectionHandlerProviderFn != null, "connection handler provider can not be null");
+      return builder().setConnectionHandlerProviderFn(connectionHandlerProviderFn).build();
     }
 
     /**
@@ -458,9 +475,8 @@ public class RabbitMqIO {
     private static class WriteFn extends DoFn<RabbitMqMessage, Void> {
       private final Write spec;
 
-      // TODO: for beam, make the connection static (like jdbc) but use
-      // separate channels
-      private transient ConnectionHandler connectionHandler;
+      private UUID writerId;
+      private transient ChannelLeaser channelLeaser;
 
       WriteFn(Write spec) {
         this.spec = spec;
@@ -468,9 +484,14 @@ public class RabbitMqIO {
 
       @Setup
       public void setup() throws Exception {
-        connectionHandler = new ConnectionHandler(spec.uri());
+        if (writerId == null) {
+          writerId = UUID.randomUUID();
+        }
+        if (channelLeaser == null) {
+          channelLeaser = spec.connectionHandlerProviderFn().apply(null);
+        }
 
-        Channel channel = connectionHandler.getChannel();
+        Channel channel = channelLeaser.acquireChannel(writerId);
 
         if (spec.exchange() != null && spec.exchangeDeclare()) {
           channel.exchangeDeclare(spec.exchange(), spec.exchangeType());
@@ -483,7 +504,7 @@ public class RabbitMqIO {
       @ProcessElement
       public void processElement(ProcessContext c) throws IOException {
         RabbitMqMessage message = c.element();
-        Channel channel = connectionHandler.getChannel();
+        Channel channel = channelLeaser.acquireChannel(writerId);
 
         // TODO: get rid of 'exchange' vs 'queue'
         if (spec.exchange() != null) {
@@ -501,11 +522,7 @@ public class RabbitMqIO {
       }
 
       @Teardown
-      public void teardown() throws Exception {
-        if (connectionHandler != null) {
-          connectionHandler.close();
-        }
-      }
+      public void teardown() throws Exception {}
     }
   }
 }
