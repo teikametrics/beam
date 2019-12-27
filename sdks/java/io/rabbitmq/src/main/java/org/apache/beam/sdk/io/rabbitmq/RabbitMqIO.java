@@ -157,7 +157,7 @@ public class RabbitMqIO {
   }
 
   public static Write write() {
-    return new AutoValue_RabbitMqIO_Write.Builder().setQueueDeclare(false).build();
+    return new AutoValue_RabbitMqIO_Write.Builder().build();
   }
 
   private RabbitMqIO() {}
@@ -550,9 +550,9 @@ public class RabbitMqIO {
               channel -> {
                 channel.basicPublish(
                     spec.exchange(),
-                    message.getRoutingKey(),
+                    message.routingKey(),
                     message.createProperties(),
-                    message.getBody());
+                    message.body());
                 return null;
               };
 
