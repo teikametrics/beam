@@ -41,7 +41,6 @@ import javax.annotation.Nullable;
 @AutoValue
 abstract class RabbitMqMessage implements Serializable {
 
-  @Nullable
   abstract String routingKey();
 
   @SuppressWarnings("mutable")
